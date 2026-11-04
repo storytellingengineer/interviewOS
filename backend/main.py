@@ -131,10 +131,17 @@ async def evaluate(req:EvaluateRequest):
 
 @app.post("/api/summary")
 async def summary(req:SummaryRequest):
-    if not req.evaluations: raise HTTPException(400,"No evaluated answers to summarize.")
-    scores=[float(x.get("overall_score",0)) for x in req.evaluations if str(x.get("overall_score","")).replace(".","",1).isdigit()]
-    tips=list(dict.fromkeys(t for e in req.evaluations for t in e.get("improvements",[])))
-    return {"role":req.role,"average_score":round(sum(scores)/len(scores),1) if scores else 0,"questions_answered":len(req.evaluations),"top_focus_areas":tips[:5]}
+    answered=[e for e in req.evaluations if not e.get("skipped",False)]
+    if not answered: raise HTTPException(400,"No evaluated answers to summarize.")
+    scores=[float(x.get("overall_score",0)) for x in answered if str(x.get("overall_score","")).replace(".","",1).isdigit()]
+    tips=list(dict.fromkeys(t for e in answered for t in e.get("improvements",[])))
+    return {
+        "role":req.role,
+        "average_score":round(sum(scores)/len(scores),1) if scores else 0,
+        "questions_answered":len(answered),
+        "questions_skipped":len(req.evaluations)-len(answered),
+        "top_focus_areas":tips[:5]
+    }
 
 @app.get("/")
 async def home():

@@ -1,13 +1,146 @@
-const state={resumeText:"",analysis:null,questions:[],evaluations:[],index:0,role:"",jd:"",mode:"mixed"};const $=id=>document.getElementById(id);
-function show(id){["setup","analysis","interview","results"].forEach(x=>$(x).classList.toggle("hidden",x!==id));const n=id==="setup"?1:id==="results"?3:2;["s1","s2","s3"].forEach((x,i)=>$(x).classList.toggle("active",i+1===n))}
-function putList(id,items){$(id).innerHTML="";(items||[]).forEach(x=>{const li=document.createElement("li");li.textContent=x;$(id).appendChild(li)})}
-function putChips(id,items,gap=false){$(id).innerHTML="";(items?.length?items:["No clear evidence found"]).forEach(x=>{const s=document.createElement("span");s.className="chip"+(gap?" gap":"");s.textContent=x;$(id).appendChild(s)})}
-async function api(path,opts){const r=await fetch(path,opts);const d=await r.json().catch(()=>({detail:"Unexpected server response"}));if(!r.ok)throw Error(d.detail||"Request failed");return d}
-function busy(b,on,label){b.disabled=on;if(on){b.dataset.old=b.textContent;b.textContent=label}else b.textContent=b.dataset.old||b.textContent}
-$("form").onsubmit=async e=>{e.preventDefault();$("error").textContent="";const file=$("resume").files[0],jd=$("jd").value.trim();if(!file)return;if(jd.length<80){$("error").textContent="Add a fuller job description (at least 80 characters).";return}const b=$("analyze");busy(b,true,"Analyzing...");try{const fd=new FormData();fd.append("resume",file);fd.append("job_description",jd);fd.append("role",$("role").value);const d=await api("/api/analyze",{method:"POST",body:fd});Object.assign(state,{resumeText:d.resume_text||"",analysis:d,role:$("role").value,jd,mode:$("mode").value});$("summary").textContent=d.summary||"Resume and target role compared.";$("score").textContent=(d.match_score??"—")+"%";putChips("matched",d.matched_skills);putChips("gaps",d.gaps,true);putList("focus",d.focus_areas);$("notice").textContent=d.demo?"Demo keyword analysis. Configure an API key for contextual AI analysis.":"AI-assisted analysis; verify against your actual experience.";show("analysis")}catch(err){$("error").textContent=err.message}finally{busy(b,false)}};
-$("edit").onclick=()=>show("setup");$("start").onclick=async()=>{const b=$("start");busy(b,true,"Generating...");try{const d=await api("/api/questions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({role:state.role,mode:state.mode,difficulty:$("difficulty").value,count:+$("count").value,resume_text:state.resumeText,job_description:state.jd,analysis:state.analysis})});state.questions=d.questions||[];state.evaluations=[];state.index=0;if(!state.questions.length)throw Error("No questions returned.");renderQuestion();show("interview")}catch(e){$("notice").textContent=e.message}finally{busy(b,false)}};
-function renderQuestion(){const q=state.questions[state.index];$("number").textContent=String(state.index+1).padStart(2,"0");$("countLabel").textContent=(state.index+1)+" of "+state.questions.length;$("bar").style.width=(state.index/state.questions.length*100)+"%";$("question").textContent=q.question;$("evalFocus").textContent="Listen for: "+(q.evaluation_focus||"clear reasoning and relevant examples");$("answer").value="";$("feedback").classList.add("hidden");$("submit").classList.remove("hidden");$("skip").classList.remove("hidden");$("answerError").textContent=""}
-$("submit").onclick=async()=>{const answer=$("answer").value.trim();if(answer.length<15){$("answerError").textContent="Add more detail so your reasoning can be evaluated.";return}const b=$("submit");busy(b,true,"Evaluating...");try{const q=state.questions[state.index];const d=await api("/api/evaluate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({role:state.role,question:q.question,answer,resume_text:state.resumeText,job_description:state.jd,mode:state.mode})});state.evaluations.push({...d,question:q.question,answer});$("verdict").textContent=d.verdict||"Feedback";$("answerScore").textContent=(d.overall_score??"—")+"/10";putList("worked",d.what_worked);putList("improve",d.improvements);$("stronger").textContent=d.stronger_answer_outline||"";$("evalNotice").textContent=d.demo?"Demo rubric feedback, not a model assessment.":"AI-generated feedback; verify technical claims.";$("feedback").classList.remove("hidden");$("submit").classList.add("hidden");$("skip").classList.add("hidden")}catch(e){$("answerError").textContent=e.message}finally{busy(b,false)}};
-async function finish(){try{const d=await api("/api/summary",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({role:state.role,evaluations:state.evaluations})});$("average").textContent=d.average_score;putList("recommendations",d.top_focus_areas);state.summary=d;$("resultIntro").textContent="You completed "+d.questions_answered+" evaluated answers for "+state.role+"."}catch(e){$("resultIntro").textContent="Session complete; summary unavailable."}show("results")}
-$("next").onclick=()=>{if(state.index+1<state.questions.length){state.index++;renderQuestion()}else finish()};$("skip").onclick=()=>{state.evaluations.push({overall_score:0,improvements:["Attempt this question in your next practice session."]});if(state.index+1<state.questions.length){state.index++;renderQuestion()}else finish()};$("restart").onclick=()=>{state.evaluations=[];state.index=0;show("setup")};$("clear").onclick=()=>{Object.assign(state,{resumeText:"",analysis:null,questions:[],evaluations:[],index:0});$("form").reset();$("answer").value="";show("setup")};
-$("download").onclick=()=>{const content=["InterviewOS Practice Report","Role: "+state.role,"Average score: "+(state.summary?.average_score??"N/A")+"/10","",...state.evaluations.flatMap((e,i)=>["Question "+(i+1)+": "+(e.question||"Skipped"),"Score: "+e.overall_score+"/10","Answer: "+(e.answer||"Skipped"),...(e.improvements||[]).map(x=>"- "+x),""])].join("\n");const url=URL.createObjectURL(new Blob([content],{type:"text/plain"}));const a=document.createElement("a");a.href=url;a.download="interviewos-report.txt";a.click();URL.revokeObjectURL(url)};
+const state={resumeText:"",analysis:null,questions:[],evaluations:[],index:0,role:"",jd:"",mode:"mixed",summary:null};
+const $=id=>document.getElementById(id);
+function show(id){
+  ["setup","analysis","interview","results"].forEach(x=>$(x).classList.toggle("hidden",x!==id));
+  const step=id==="setup"?1:id==="analysis"||id==="interview"?2:3;
+  ["s1","s2","s3"].forEach((x,i)=>$(x).classList.toggle("active",i+1===step));
+  const selected=id==="setup"||id==="analysis"?"Overview":id==="interview"?"Interview":"Results";
+  document.querySelectorAll(".side-link").forEach(a=>a.classList.toggle("selected",a.textContent.includes(selected)));
+  window.scrollTo({top:0,behavior:"smooth"});
+}
+function putList(id,items){
+  $(id).innerHTML="";
+  (items||[]).forEach(x=>{const li=document.createElement("li");li.textContent=x;$(id).appendChild(li)});
+}
+function putChips(id,items,gap=false){
+  $(id).innerHTML="";
+  (items?.length?items:["No clear evidence found"]).forEach(x=>{const s=document.createElement("span");s.className="chip"+(gap?" gap":"");s.textContent=x;$(id).appendChild(s)});
+}
+async function api(path,opts){
+  const r=await fetch(path,opts);
+  const d=await r.json().catch(()=>({detail:"Unexpected server response"}));
+  if(!r.ok)throw Error(d.detail||"Request failed");
+  return d;
+}
+function busy(button,on,label){
+  button.disabled=on;
+  if(on){button.dataset.old=button.textContent;button.textContent=label}
+  else button.textContent=button.dataset.old||button.textContent;
+}
+function resetFeedback(){
+  $("feedback").classList.add("hidden");
+  $("submit").classList.remove("hidden");
+  $("skip").classList.remove("hidden");
+  $("answerError").textContent="";
+}
+$("form").onsubmit=async e=>{
+  e.preventDefault();
+  $("error").textContent="";
+  const file=$("resume").files[0],jd=$("jd").value.trim();
+  if(!file){$("error").textContent="Upload your resume to continue.";return}
+  if(jd.length<80){$("error").textContent="Add a fuller job description (at least 80 characters).";return}
+  const b=$("analyze");busy(b,true,"Analyzing your profile...");
+  try{
+    const fd=new FormData();
+    fd.append("resume",file);fd.append("job_description",jd);fd.append("role",$("role").value);
+    const d=await api("/api/analyze",{method:"POST",body:fd});
+    Object.assign(state,{resumeText:d.resume_text||"",analysis:d,role:$("role").value,jd,mode:$("mode").value});
+    $("summary").textContent=d.summary||"Resume and target role compared.";
+    $("score").textContent=(d.match_score??"—")+"%";
+    putChips("matched",d.matched_skills);putChips("gaps",d.gaps,true);putList("focus",d.focus_areas);
+    $("notice").textContent=d.demo?"Demo keyword analysis. Configure an API key for contextual AI analysis.":"AI-assisted analysis. Treat this as guidance and verify it against your actual experience.";
+    show("analysis");
+  }catch(err){$("error").textContent=err.message}
+  finally{busy(b,false)}
+};
+$("edit").onclick=()=>show("setup");
+$("start").onclick=async()=>{
+  const b=$("start");busy(b,true,"Building your interview...");
+  try{
+    const d=await api("/api/questions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+      role:state.role,mode:state.mode,difficulty:$("difficulty").value,count:+$("count").value,
+      resume_text:state.resumeText,job_description:state.jd,analysis:state.analysis
+    })});
+    state.questions=d.questions||[];state.evaluations=[];state.index=0;state.summary=null;
+    if(!state.questions.length)throw Error("No questions returned. Try generating the session again.");
+    renderQuestion();show("interview");
+  }catch(e){$("notice").textContent=e.message}
+  finally{busy(b,false)}
+};
+function renderQuestion(){
+  const q=state.questions[state.index];
+  $("number").textContent=String(state.index+1).padStart(2,"0");
+  $("countLabel").textContent=(state.index+1)+" of "+state.questions.length;
+  $("bar").style.width=(state.index/state.questions.length*100)+"%";
+  $("question").textContent=q.question;
+  $("evalFocus").textContent="Listen for: "+(q.evaluation_focus||"clear reasoning and relevant examples");
+  $("answer").value="";
+  resetFeedback();
+}
+$("submit").onclick=async()=>{
+  const answer=$("answer").value.trim();
+  if(answer.length<15){$("answerError").textContent="Add more detail so your reasoning can be evaluated.";return}
+  const b=$("submit");busy(b,true,"Evaluating your answer...");
+  try{
+    const q=state.questions[state.index];
+    const d=await api("/api/evaluate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+      role:state.role,question:q.question,answer,resume_text:state.resumeText,job_description:state.jd,mode:state.mode
+    })});
+    state.evaluations.push({...d,question:q.question,answer,skipped:false});
+    $("verdict").textContent=d.verdict||"Feedback";
+    $("answerScore").textContent=(d.overall_score??"—")+"/10";
+    putList("worked",d.what_worked);putList("improve",d.improvements);
+    $("stronger").textContent=d.stronger_answer_outline||"";
+    $("evalNotice").textContent=d.demo?"Demo rubric feedback, not a validated model assessment.":"AI-generated feedback. Verify technical claims and use your own judgment.";
+    $("feedback").classList.remove("hidden");$("submit").classList.add("hidden");$("skip").classList.add("hidden");
+  }catch(e){$("answerError").textContent=e.message}
+  finally{busy(b,false)}
+};
+async function finish(){
+  try{
+    const d=await api("/api/summary",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({role:state.role,evaluations:state.evaluations})});
+    $("average").textContent=d.average_score;
+    putList("recommendations",d.top_focus_areas);
+    state.summary=d;
+    $("resultIntro").textContent="You completed "+d.questions_answered+" evaluated answers across "+state.questions.length+" questions for "+state.role+".";
+  }catch(e){
+    $("average").textContent="—";
+    $("resultIntro").textContent="Session complete; summary unavailable. "+e.message;
+  }
+  $("bar").style.width="100%";
+  show("results");
+}
+function advance(){
+  if(state.index+1<state.questions.length){state.index++;renderQuestion()}
+  else finish();
+}
+$("next").onclick=advance;
+$("skip").onclick=()=>{
+  const q=state.questions[state.index];
+  state.evaluations.push({question:q.question,answer:"",overall_score:null,improvements:["Attempt this question in your next practice session."],skipped:true});
+  advance();
+};
+$("restart").onclick=()=>{
+  state.evaluations=[];state.questions=[];state.index=0;state.summary=null;
+  $("form").reset();show("setup");
+};
+$("clear").onclick=()=>{
+  Object.assign(state,{resumeText:"",analysis:null,questions:[],evaluations:[],index:0,role:"",jd:"",mode:"mixed",summary:null});
+  $("form").reset();$("answer").value="";$("error").textContent="";$("answerError").textContent="";
+  show("setup");
+};
+$("download").onclick=()=>{
+  const content=[
+    "InterviewOS Practice Report","Role: "+state.role,
+    "Average score: "+(state.summary?.average_score??"N/A")+"/10","",
+    ...state.evaluations.flatMap((e,i)=>[
+      "Question "+(i+1)+": "+(e.question||"Skipped"),
+      "Score: "+(e.skipped?"Skipped":(e.overall_score??"N/A")+"/10"),
+      "Answer: "+(e.answer||"Not answered"),
+      ...(e.improvements||[]).map(x=>"- "+x),""
+    ])
+  ].join("\n");
+  const url=URL.createObjectURL(new Blob([content],{type:"text/plain"}));
+  const a=document.createElement("a");a.href=url;a.download="interviewos-report.txt";a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+};
